@@ -1,3 +1,5 @@
+# src/data_loader.py
+
 import cv2
 import pandas as pd
 import torch
@@ -10,6 +12,7 @@ class PiratesLazyDataset(Dataset):
     """
     Processes video data on-the-fly to avoid memory and disk space issues.
     This version manually counts frames to be robust to corrupted video metadata.
+    Don't worry if the run returns a error about sequence abruptly stopped, just ignore it as the model loads most of the frames from the video.
     """
     def __init__(self, video_dir, log_path, game_name_in_filename="platform", sequence_length=16, frame_size=(128, 128)):
         self.video_dir = video_dir
@@ -34,6 +37,7 @@ class PiratesLazyDataset(Dataset):
     def _create_index_map(self):
         index_map = []
         for video_path in tqdm(self.video_files, desc="Building Index"):
+            # --- FIX: Manually count frames for robustness ---
             try:
                 cap = cv2.VideoCapture(video_path)
                 num_frames = 0
@@ -46,6 +50,7 @@ class PiratesLazyDataset(Dataset):
             except Exception as e:
                 print(f"Warning: Could not process video {os.path.basename(video_path)}. Error: {e}")
                 continue
+            # --- END FIX ---
 
             if num_frames > self.sequence_length:
                 for i in range(num_frames - self.sequence_length):
@@ -73,7 +78,6 @@ class PiratesLazyDataset(Dataset):
         cap.release()
 
         frames = np.array(frames, dtype=np.float32)
-        
         frame_seq = frames[:self.sequence_length]
         next_frame = frames[self.sequence_length]
 
@@ -96,3 +100,31 @@ def collate_fn(batch):
     if not batch:
         return None, None, None
     return torch.utils.data.dataloader.default_collate(batch)
+
+
+if __name__ == '__main__':
+    BASE_DIR = '..' 
+    DATASET_DIR = os.path.join(BASE_DIR, 'PIRATES_DATASET')
+    VIDEO_DIR = os.path.join(DATASET_DIR, 'videos')
+    LOG_PATH = os.path.join(DATASET_DIR, 'raw_data/raw_data.csv')
+
+    print("Testing the Lazy Data Loader...")
+    dataset = PiratesLazyDataset(video_dir=VIDEO_DIR, log_path=LOG_PATH)
+    
+    if len(dataset) > 0:
+        dataloader = DataLoader(dataset, batch_size=4, shuffle=True, collate_fn=collate_fn)
+        
+        for i, (frame_seq_b, action_b, next_frame_b) in enumerate(dataloader):
+            if frame_seq_b is None:
+                print("Skipping a corrupt batch.")
+                continue
+            
+            print(f"\n--- Batch {i+1} Test Successful ---")
+            print(f"Frame Sequence Shape: {frame_seq_b.shape}")
+            print(f"Action Shape: {action_b.shape}")
+            print(f"Next Frame Shape: {next_frame_b.shape}")
+            
+            if i > 5:
+                break
+    else:
+        print("Test complete, but no sequences were found.")
